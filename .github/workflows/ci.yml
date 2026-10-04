@@ -1,7 +1,7 @@
 name: skip-ffi
 on:
   push:
-    branches: [ main ]
+    branches: [ main, ci/arm-macos-runners-run ]
     tags: "[0-9]+.[0-9]+.[0-9]+"
   schedule:
     - cron:  '0 10 * * *'
