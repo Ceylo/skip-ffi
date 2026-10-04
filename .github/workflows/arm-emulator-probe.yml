@@ -1,0 +1,69 @@
+name: arm-emulator-probe
+on:
+  push:
+    branches: [ probe/arm-emulator ]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ['macos-26', 'macos-15']
+        api-level: ['28', '34']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - name: Host facts
+        run: |
+          mkdir -p probe-logs
+          {
+            uname -a
+            sysctl -n machdep.cpu.brand_string || true
+            sysctl hw.ncpu hw.memsize || true
+            echo "kern.hv_support: $(sysctl -n kern.hv_support 2>&1)"
+            echo "RUNNER_ARCH=$RUNNER_ARCH ImageOS=$ImageOS ImageVersion=$ImageVersion"
+            echo "ANDROID_HOME=$ANDROID_HOME"
+            ls "$ANDROID_HOME" || true
+          } 2>&1 | tee probe-logs/host.txt
+
+      - name: Emulator accel-check
+        run: |
+          set +e
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" emulator > /dev/null
+          "$ANDROID_HOME/emulator/emulator" -version 2>&1 | tee probe-logs/emulator-version.txt
+          "$ANDROID_HOME/emulator/emulator" -accel-check 2>&1 | tee probe-logs/accel-check.txt
+          echo "accel-check exit: ${PIPESTATUS[0]}" | tee -a probe-logs/accel-check.txt
+          exit 0
+
+      - name: Boot arm64-v8a emulator
+        id: boot
+        continue-on-error: true
+        timeout-minutes: 25
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: ${{ matrix.api-level == '28' && 'default' || 'google_apis' }}
+          arch: arm64-v8a
+          profile: 'Nexus 4'
+          disk-size: 4096M
+          emulator-boot-timeout: 900
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -verbose
+          disable-animations: true
+          script: |
+            adb shell getprop sys.boot_completed | tee probe-logs/boot-completed.txt
+            adb shell getprop ro.product.cpu.abi | tee probe-logs/abi.txt
+            adb shell uptime | tee probe-logs/uptime.txt
+
+      - name: Record outcome
+        if: always()
+        run: |
+          echo "boot step outcome: ${{ steps.boot.outcome }}" | tee probe-logs/outcome.txt
+          cp -R ~/.android/avd/*.avd/*.txt probe-logs/ 2>/dev/null || true
+          ls ~/.android/avd 2>/dev/null | tee -a probe-logs/outcome.txt || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-${{ matrix.os }}-api${{ matrix.api-level }}
+          path: probe-logs/
